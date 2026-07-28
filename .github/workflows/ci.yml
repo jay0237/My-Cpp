@@ -1,0 +1,122 @@
+name: C++ CI
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  pull_request:
+    branches: [ "main", "master" ]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  static-analysis:
+    name: Static Analysis (Cppcheck)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Install Cppcheck
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cppcheck
+
+      - name: Run Cppcheck Analysis
+        run: |
+          cppcheck --enable=warning,style,performance,portability \
+                   --inline-suppr \
+                   --error-exitcode=1 \
+                   --language=c++ \
+                   --std=c++17 \
+                   --suppress=missingIncludeSystem \
+                   --suppress=unreadVariable \
+                   --suppress=unusedVariable \
+                   --suppress=knownConditionTrueFalse \
+                   .
+
+  build-and-test:
+    name: Build & Test (${{ matrix.os }} / ${{ matrix.compiler }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            compiler: g++
+          - os: ubuntu-latest
+            compiler: clang++
+          - os: macos-latest
+            compiler: clang++
+          - os: windows-latest
+            compiler: g++
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Compile C++ Source Files
+        shell: bash
+        run: |
+          echo "========================================"
+          echo " Compiling with ${{ matrix.compiler }} on ${{ matrix.os }}"
+          echo "========================================"
+          mkdir -p build
+          failed=0
+          
+          for file in *.cpp; do
+            if [ -f "$file" ]; then
+              exe="build/${file%.cpp}"
+              echo "Building: $file -> $exe"
+              if ${{ matrix.compiler }} -std=c++17 -Wall -Wextra -Wpedantic "$file" -o "$exe"; then
+                echo "  [OK] $file compiled successfully"
+              else
+                echo "  [FAIL] $file failed compilation"
+                failed=1
+              fi
+            fi
+          done
+
+          if [ $failed -ne 0 ]; then
+            echo "One or more C++ files failed to compile."
+            exit 1
+          fi
+
+      - name: Run Binaries (Smoke Tests)
+        shell: bash
+        run: |
+          echo "========================================"
+          echo " Running Smoke Tests on Binaries"
+          echo "========================================"
+          failed=0
+
+          for file in *.cpp; do
+            base="${file%.cpp}"
+            # Check for executable with or without .exe extension
+            if [ -f "build/$base" ]; then
+              exe="build/$base"
+            elif [ -f "build/$base.exe" ]; then
+              exe="build/$base.exe"
+            else
+              continue
+            fi
+
+            echo "Executing: $exe"
+            # Provide sample interactive inputs (e.g. for calc, digits, voting, etc.)
+            if echo -e "10\n5\n1" | "$exe" > /dev/null 2>&1; then
+              echo "  [PASSED] $base executed cleanly"
+            else
+              echo "  [FAILED] $base exited with non-zero exit code"
+              failed=1
+            fi
+          done
+
+          if [ $failed -ne 0 ]; then
+            echo "One or more executables failed smoke test execution."
+            exit 1
+          fi
